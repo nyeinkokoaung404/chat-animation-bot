@@ -14,6 +14,10 @@ Telegram Settings → Telegram Business → Chatbots → Add Bot
 
 The bot must have permission to read and reply to the selected chats. The bot receives updates containing `business_connection_id` and replies with that same ID.
 
+This repository is configured for **User reply only**: it generates a reply only after an incoming user `business_message`. It does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
+
+Telegram may show `This bot doesn't support Secretary Mode yet` while adding the bot. That is a BotFather capability setting, not a Cloudflare error. Open `@BotFather → Bot Settings → Business Mode` and enable **Secretary Mode**, then reconnect the bot from Telegram Business settings. The code still remains reply-only; enabling Secretary Mode only allows Telegram to establish the Business connection.
+
 ## 1. Create the Cloudflare Worker
 
 Install and authenticate Wrangler:
@@ -38,6 +42,14 @@ openssl rand -hex 32
 ```
 
 The Worker uses the native Workers AI binding from `wrangler.toml`. No Cloudflare AI REST token is needed for the normal path.
+
+Optional owner allow-list for `/stat`:
+
+```bash
+wrangler secret put STAT_OWNER_IDS
+```
+
+Use comma-separated Telegram user IDs. The connected Business account owner is also recognized after the Worker receives its `business_connection` update.
 
 ## 3. Set the webhook
 
@@ -98,11 +110,13 @@ The response should be JSON with `service: chat-animation-bot`.
 
 - `business_message` with text/caption → AI reply
 - `/help` → short setup help
+- `/stat` → runtime statistics for the connected account owner
 - `/stop` or `/disable_ai` → explains how to disconnect from Telegram Business settings
 - `edited_business_message` → ignored by default to prevent duplicate replies
 - `business_connection` → logged without exposing secrets
 - Webhook secret is checked when configured
 - Webhook returns quickly and runs AI work through `waitUntil`
+- root `GET /` reports `mode: user-reply-only` and the identity `4 0 4 \\ 2.0 [🇲🇲]`
 
 ## Security
 

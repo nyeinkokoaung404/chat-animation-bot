@@ -5,6 +5,15 @@ import { generateAssistantReply } from './robot-ai.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_TELEGRAM_TEXT = 4096;
+const BOT_DISPLAY_NAME = '4 0 4 \\ 2.0 [🇲🇲]';
+const startedAt = Date.now();
+const metrics = {
+    received: 0,
+    replied: 0,
+    skipped: 0,
+    errors: 0,
+};
+const connections = new Map();
 
 function json(data, status = 200) {
     return new Response(JSON.stringify(data), {
@@ -24,6 +33,44 @@ function truncate(value, max = MAX_TELEGRAM_TEXT) {
 
 function getToken(env) {
     return text(env.TELEGRAM_BOT_TOKEN);
+}
+
+function formatUptime(milliseconds) {
+    let seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const days = Math.floor(seconds / 86400);
+    seconds %= 86400;
+    const hours = Math.floor(seconds / 3600);
+    seconds %= 3600;
+    const minutes = Math.floor(seconds / 60);
+    seconds %= 60;
+    return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+}
+
+function getConfiguredOwnerIds(env) {
+    return text(env.STAT_OWNER_IDS)
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isSafeInteger(value) && value > 0);
+}
+
+function isOwnerMessage(message, env) {
+    const connection = connections.get(message?.business_connection_id);
+    const connectedOwnerId = connection?.user?.id;
+    const configuredOwnerIds = getConfiguredOwnerIds(env);
+    return Number(message?.from?.id) === Number(connectedOwnerId)
+        || configuredOwnerIds.includes(Number(message?.from?.id));
+}
+
+function statisticsText() {
+    return [
+        `📊 ${BOT_DISPLAY_NAME}`,
+        '',
+        `⏱ Uptime: ${formatUptime(Date.now() - startedAt)}`,
+        `📩 User messages: ${metrics.received}`,
+        `✅ AI replies: ${metrics.replied}`,
+        `⏭ Skipped: ${metrics.skipped}`,
+        `❌ Errors: ${metrics.errors}`,
+    ].join('\n');
 }
 
 async function telegram(env, method, payload) {
@@ -76,15 +123,42 @@ function isSupportedBusinessMessage(message) {
         && message?.chat?.id
         && message?.from?.id
         && !message?.from?.is_bot
+        && !message?.sender_business_bot
         && messageText(message),
     );
 }
 
+function canReplyToBusinessMessage(message) {
+    const rights = connections.get(message?.business_connection_id)?.rights;
+    // If no connection update has reached this Worker instance yet, let
+    // Telegram decide. Once rights are known, enforce can_reply explicitly.
+    return rights?.can_reply !== false;
+}
+
 async function handleBusinessMessage(update, env) {
     const message = update.business_message;
-    if (!isSupportedBusinessMessage(message)) return { ignored: true, reason: 'unsupported' };
+    if (!isSupportedBusinessMessage(message)) {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'unsupported' };
+    }
+    metrics.received += 1;
+
+    if (!canReplyToBusinessMessage(message)) {
+        metrics.skipped += 1;
+        console.warn('Business connection does not have can_reply:', message.business_connection_id);
+        return { ignored: true, reason: 'can_reply_missing' };
+    }
 
     const prompt = messageText(message);
+    if (/^\/stat(?:@\w+)?(?:\s|$)/i.test(prompt)) {
+        if (isOwnerMessage(message, env)) {
+            await sendBusinessMessage(env, message, statisticsText());
+            metrics.replied += 1;
+        } else {
+            metrics.skipped += 1;
+        }
+        return { ok: true, command: 'stat' };
+    }
     if (prompt.startsWith('/disable_ai') || prompt.startsWith('/stop')) {
         await sendBusinessMessage(env, message, 'AI chat automation is still connected. To disable it, open Telegram Business Settings → Chatbots and remove this bot.');
         return { ok: true, command: 'disable_info' };
@@ -101,6 +175,7 @@ async function handleBusinessMessage(update, env) {
         chatType: message.chat.type,
     });
     await sendBusinessMessage(env, message, reply);
+    metrics.replied += 1;
     return { ok: true, command: 'ai_reply' };
 }
 
@@ -115,7 +190,7 @@ export default {
         const url = new URL(request.url);
 
         if (request.method === 'GET' && url.pathname === '/') {
-            return json({ ok: true, service: 'chat-animation-bot', mode: 'telegram-business' });
+            return json({ ok: true, service: 'chat-animation-bot', bot: BOT_DISPLAY_NAME, mode: 'user-reply-only' });
         }
 
         if (request.method !== 'POST' || url.pathname !== '/webhook') {
@@ -140,13 +215,21 @@ export default {
                     // Avoid duplicate responses to edited messages by default.
                     console.log('Ignored edited_business_message', update.update_id);
                 } else if (update.business_connection) {
+                    const connection = update.business_connection;
+                    connections.set(connection.id, {
+                        user: connection.user,
+                        rights: connection.rights || {},
+                        enabled: connection.is_enabled,
+                    });
                     console.log('Business connection update', JSON.stringify({
-                        id: update.business_connection.id,
-                        user_id: update.business_connection.user?.id,
-                        enabled: update.business_connection.is_enabled,
+                        id: connection.id,
+                        user_id: connection.user?.id,
+                        can_reply: connection.rights?.can_reply,
+                        enabled: connection.is_enabled,
                     }));
                 }
             } catch (error) {
+                metrics.errors += 1;
                 console.error('Business update failed:', error);
             }
         })();
@@ -157,4 +240,4 @@ export default {
     },
 };
 
-export { handleBusinessMessage, sendBusinessMessage, telegram };
+export { handleBusinessMessage, sendBusinessMessage, telegram, statisticsText };
