@@ -1,5 +1,7 @@
 // chat-animation-bot — Cloudflare Worker entrypoint
 // Telegram Business Chat Automation + Cloudflare Workers AI
+// Behavior: only the configured owner's Business connection is served;
+// owner messages trigger replies only when they contain a command.
 
 import { generateAssistantReply } from './robot-ai.js';
 
@@ -7,13 +9,42 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_TELEGRAM_TEXT = 4096;
 const BOT_DISPLAY_NAME = '4 0 4 \\ 2.0 [🇲🇲]';
 const startedAt = Date.now();
-const metrics = {
-    received: 0,
-    replied: 0,
-    skipped: 0,
-    errors: 0,
-};
+const metrics = { received: 0, replied: 0, skipped: 0, errors: 0 };
 const connections = new Map();
+
+const PRODUCT_RICH_MESSAGE = {
+    markdown: [
+        '# Available Products ✅',
+        '---',
+        '## Digital Ocean Accounts',
+        '| Package | Price | Details |',
+        '| --- | ---: | --- |',
+        '| 3 Droplets | 35,000 Ks | 5$ trial account, card-made check, secure-login warranty |',
+        '| 10 Droplets | 40,000 Ks | 5$ trial account, card-made check, secure-login warranty |',
+        '| 3 Droplets | 50,000 Ks | 5$ PayPal paid check, secure-login warranty |',
+        '',
+        '## All SIM / WiFi Data Packages',
+        '| Data volume | Price | Availability |',
+        '| --- | ---: | --- |',
+        '| 150 GB | 4,000 Ks | All SIM, WiFi & Starlink ✅ |',
+        '| 250 GB | 5,500 Ks | All SIM, WiFi & Starlink ✅ |',
+        '| 500 GB | 8,500 Ks | All SIM, WiFi & Starlink ✅ |',
+        '',
+        '## VPS Prices',
+        '| CPU | Memory | Disk | Price | Traffic | Location |',
+        '| --- | --- | --- | ---: | --- | --- |',
+        '| 2 Core | 3 GB | 30 GB | 35,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
+        '| 4 Core | 6 GB | 60 GB | 70,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
+        '| 6 Core | 12 GB | 100 GB | 100,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
+        '| 2 Core | 4 GB | 100 GB | 50,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
+        '| 3 Core | 8 GB | 200 GB | 100,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
+        '| 1 Core | 1 GB | 30 GB | 35,000 Ks | 5 TB ✅ | Singapore 🇸🇬 |',
+        '| 2 Core | 2 GB | 60 GB | 50,000 Ks | 10 TB ✅ | Singapore 🇸🇬 |',
+        '| 2 Core | 4 GB | 120 GB | 80,000 Ks | 15 TB ✅ | Singapore 🇸🇬 |',
+        '',
+        '📩 For more information and to purchase, contact [@nkka404](https://t.me/nkka404).',
+    ].join('\n'),
+};
 
 function json(data, status = 200) {
     return new Response(JSON.stringify(data), {
@@ -46,19 +77,10 @@ function formatUptime(milliseconds) {
     return `${days}d ${hours}h ${minutes}m ${seconds}s`;
 }
 
-function getConfiguredOwnerIds(env) {
-    return text(env.STAT_OWNER_IDS)
-        .split(',')
+function ownerIds(env) {
+    return [text(env.OWNER_TELEGRAM_ID), ...text(env.STAT_OWNER_IDS).split(',')]
         .map((value) => Number(value.trim()))
         .filter((value) => Number.isSafeInteger(value) && value > 0);
-}
-
-function isOwnerMessage(message, env) {
-    const connection = connections.get(message?.business_connection_id);
-    const connectedOwnerId = connection?.user?.id;
-    const configuredOwnerIds = getConfiguredOwnerIds(env);
-    return Number(message?.from?.id) === Number(connectedOwnerId)
-        || configuredOwnerIds.includes(Number(message?.from?.id));
 }
 
 function statisticsText() {
@@ -89,20 +111,38 @@ async function telegram(env, method, payload) {
     return data;
 }
 
+function replyPayload(message) {
+    return message.message_id ? { reply_parameters: { message_id: message.message_id } } : {};
+}
+
 async function sendBusinessMessage(env, message, replyText) {
-    const payload = {
+    return telegram(env, 'sendMessage', {
         chat_id: message.chat.id,
         text: truncate(replyText),
         disable_web_page_preview: true,
         business_connection_id: message.business_connection_id,
+        ...replyPayload(message),
+    });
+}
+
+async function sendBusinessRichMessage(env, message) {
+    const payload = {
+        chat_id: message.chat.id,
+        rich_message: PRODUCT_RICH_MESSAGE,
+        business_connection_id: message.business_connection_id,
+        disable_web_page_preview: true,
+        reply_markup: {
+            inline_keyboard: [[{ text: '📩 Contact @nkka404', url: 'https://t.me/nkka404' }]],
+        },
+        ...replyPayload(message),
     };
 
-    // Keep the reply in the same conversation when Telegram provides a
-    // message identifier. Telegram Business bots must include the connection ID.
-    if (message.message_id) {
-        payload.reply_parameters = { message_id: message.message_id };
+    try {
+        return await telegram(env, 'sendRichMessage', payload);
+    } catch (error) {
+        console.warn('Rich message unavailable; using plain-text fallback:', error.message);
+        return sendBusinessMessage(env, message, productFallbackText());
     }
-    return telegram(env, 'sendMessage', payload);
 }
 
 async function sendTyping(env, message) {
@@ -130,9 +170,37 @@ function isSupportedBusinessMessage(message) {
 
 function canReplyToBusinessMessage(message) {
     const rights = connections.get(message?.business_connection_id)?.rights;
-    // If no connection update has reached this Worker instance yet, let
-    // Telegram decide. Once rights are known, enforce can_reply explicitly.
     return rights?.can_reply !== false;
+}
+
+function isCommand(value) {
+    return /^\/\w+(?:@\w+)?(?:\s|$)/.test(text(value));
+}
+
+function isProductCommand(value) {
+    return /^\/(?:products?|price|catalog|digital)(?:@\w+)?(?:\s|$)/i.test(text(value));
+}
+
+function productFallbackText() {
+    return [
+        'Available Products ✅',
+        '',
+        'Digital Ocean: 3 Droplets 35,000 Ks | 10 Droplets 40,000 Ks | PayPal package 50,000 Ks',
+        'SIM / WiFi: 150 GB 4,000 Ks | 250 GB 5,500 Ks | 500 GB 8,500 Ks',
+        'VPS: from 35,000 Ks to 100,000 Ks, Thailand 🇹🇭 / Singapore 🇸🇬',
+        '',
+        '📩 For more information and to purchase: @nkka404',
+    ].join('\n');
+}
+
+function isOwnerConnection(message, env) {
+    const connectionOwnerId = connections.get(message?.business_connection_id)?.user?.id;
+    const allowedOwners = ownerIds(env);
+    return allowedOwners.length > 0 && allowedOwners.includes(Number(connectionOwnerId));
+}
+
+function isOwnerSender(message, env) {
+    return ownerIds(env).includes(Number(message?.from?.id));
 }
 
 async function handleBusinessMessage(update, env) {
@@ -149,9 +217,29 @@ async function handleBusinessMessage(update, env) {
         return { ignored: true, reason: 'can_reply_missing' };
     }
 
+    // Fail closed: only the configured owner's Business account is served.
+    if (!isOwnerConnection(message, env)) {
+        metrics.skipped += 1;
+        console.warn('Skipped an unconfigured Business connection. Set OWNER_TELEGRAM_ID.');
+        return { ignored: true, reason: 'owner_connection_only' };
+    }
+
     const prompt = messageText(message);
+
+    // Owner messages are administrative only. Ordinary owner text is ignored.
+    if (isOwnerSender(message, env) && !isCommand(prompt)) {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'owner_non_command' };
+    }
+
+    if (isProductCommand(prompt)) {
+        await sendBusinessRichMessage(env, message);
+        metrics.replied += 1;
+        return { ok: true, command: 'products' };
+    }
+
     if (/^\/stat(?:@\w+)?(?:\s|$)/i.test(prompt)) {
-        if (isOwnerMessage(message, env)) {
+        if (isOwnerSender(message, env)) {
             await sendBusinessMessage(env, message, statisticsText());
             metrics.replied += 1;
         } else {
@@ -159,13 +247,16 @@ async function handleBusinessMessage(update, env) {
         }
         return { ok: true, command: 'stat' };
     }
+
     if (prompt.startsWith('/disable_ai') || prompt.startsWith('/stop')) {
-        await sendBusinessMessage(env, message, 'AI chat automation is still connected. To disable it, open Telegram Business Settings → Chatbots and remove this bot.');
+        await sendBusinessMessage(env, message, 'AI chat automation is connected. To disable it, open Telegram Business Settings → Chatbots and remove this bot.');
+        metrics.replied += 1;
         return { ok: true, command: 'disable_info' };
     }
 
     if (prompt.startsWith('/help')) {
-        await sendBusinessMessage(env, message, 'I am your chat automation assistant. Send a message and I will reply on your behalf.\n\nUse /stop for instructions to disconnect the chatbot.');
+        await sendBusinessMessage(env, message, 'I am 4 0 4 \\ 2.0 [🇲🇲]. Send a customer message and I will reply on your behalf. Use /products to show the digital product catalog.');
+        metrics.replied += 1;
         return { ok: true, command: 'help' };
     }
 
@@ -190,7 +281,7 @@ export default {
         const url = new URL(request.url);
 
         if (request.method === 'GET' && url.pathname === '/') {
-            return json({ ok: true, service: 'chat-animation-bot', bot: BOT_DISPLAY_NAME, mode: 'user-reply-only' });
+            return json({ ok: true, service: 'chat-animation-bot', bot: BOT_DISPLAY_NAME, mode: 'owner-only-user-reply' });
         }
 
         if (request.method !== 'POST' || url.pathname !== '/webhook') {
@@ -206,13 +297,11 @@ export default {
             return json({ ok: false, error: 'Invalid JSON' }, 400);
         }
 
-        // Telegram retries failed webhooks. Return quickly and finish AI work in
-        // waitUntil so Cloudflare can keep the webhook response under the limit.
         const task = (async () => {
             try {
-                if (update.business_message) await handleBusinessMessage(update, env);
-                else if (update.edited_business_message) {
-                    // Avoid duplicate responses to edited messages by default.
+                if (update.business_message) {
+                    await handleBusinessMessage(update, env);
+                } else if (update.edited_business_message) {
                     console.log('Ignored edited_business_message', update.update_id);
                 } else if (update.business_connection) {
                     const connection = update.business_connection;
@@ -221,7 +310,7 @@ export default {
                         rights: connection.rights || {},
                         enabled: connection.is_enabled,
                     });
-                    console.log('Business connection update', JSON.stringify({
+                    console.log('Business connection:', JSON.stringify({
                         id: connection.id,
                         user_id: connection.user?.id,
                         can_reply: connection.rights?.can_reply,
@@ -240,4 +329,4 @@ export default {
     },
 };
 
-export { handleBusinessMessage, sendBusinessMessage, telegram, statisticsText };
+export { handleBusinessMessage, sendBusinessMessage, sendBusinessRichMessage, telegram, statisticsText };

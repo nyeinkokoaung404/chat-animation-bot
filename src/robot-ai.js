@@ -44,7 +44,25 @@ Response rules:
 3. Use Markdown only when simple formatting helps. Do not use Telegram-specific rich_message payloads here.
 4. If the request needs a bot command, show it in backticks.
 5. If you cannot do something, say so clearly and suggest the closest available command.
-6. Never invent account-specific details, prices, availability, or verification results.`;
+6. Never invent account-specific details, prices, availability, or verification results.
+
+Digital products currently available from 4 0 4 \\ 2.0 [🇲🇲]:
+
+Digital Ocean accounts:
+- 3 Droplets — 35,000 Ks — 5$ trial account, card-made check, secure-login warranty.
+- 10 Droplets — 40,000 Ks — 5$ trial account, card-made check, secure-login warranty.
+- 3 Droplets — 50,000 Ks — 5$ PayPal paid check, secure-login warranty.
+
+SIM / WiFi data packages:
+- 150 GB — 4,000 Ks — All SIM, WiFi & Starlink.
+- 250 GB — 5,500 Ks — All SIM, WiFi & Starlink.
+- 500 GB — 8,500 Ks — All SIM, WiFi & Starlink.
+
+VPS packages:
+- Thailand: 2C/3G/30G — 35,000 Ks; 4C/6G/60G — 70,000 Ks; 6C/12G/100G — 100,000 Ks; 2C/4G/100G — 50,000 Ks; 3C/8G/200G — 100,000 Ks.
+- Singapore: 1C/1G/30G — 35,000 Ks/5TB; 2C/2G/60G — 50,000 Ks/10TB; 2C/4G/120G — 80,000 Ks/15TB.
+
+When users ask about products, pricing, availability, or buying, show the relevant exact prices above and invite them to contact @nkka404 for more information and purchase. If they ask for the complete catalog, tell them to use /products. Do not claim that payment was received or an account was delivered.`;
 
 function clean(value) {
     return String(value || '').replace(/<\/?[^>]+(>|$)/g, '').trim();

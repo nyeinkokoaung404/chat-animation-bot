@@ -14,7 +14,7 @@ Telegram Settings → Telegram Business → Chatbots → Add Bot
 
 The bot must have permission to read and reply to the selected chats. The bot receives updates containing `business_connection_id` and replies with that same ID.
 
-This repository is configured for **User reply only**: it generates a reply only after an incoming user `business_message`. It does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
+This repository is configured for **owner-only Business connection + User reply only**. It serves only the Business connection whose owner ID matches `OWNER_TELEGRAM_ID`. Customer messages in the owner's selected chats can receive an AI reply. The owner’s ordinary text is ignored; the owner can use commands such as `/stat`, `/help`, and `/products` only. The bot does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
 
 Telegram may show `This bot doesn't support Secretary Mode yet` while adding the bot. That is a BotFather capability setting, not a Cloudflare error. Open `@BotFather → Bot Settings → Business Mode` and enable **Secretary Mode**, then reconnect the bot from Telegram Business settings. The code still remains reply-only; enabling Secretary Mode only allows Telegram to establish the Business connection.
 
@@ -33,6 +33,7 @@ wrangler deploy
 ```bash
 wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_WEBHOOK_SECRET
+wrangler secret put OWNER_TELEGRAM_ID
 ```
 
 `TELEGRAM_WEBHOOK_SECRET` is optional but recommended. Use a long random value, for example:
@@ -42,6 +43,8 @@ openssl rand -hex 32
 ```
 
 The Worker uses the native Workers AI binding from `wrangler.toml`. No Cloudflare AI REST token is needed for the normal path.
+
+Set `OWNER_TELEGRAM_ID` to the numeric Telegram ID of the Business account owner. This is required; the Worker fails closed and does not answer any Business connection when it is missing. You may also set `STAT_OWNER_IDS` for additional owner/admin IDs allowed to use `/stat`.
 
 Optional owner allow-list for `/stat`:
 
@@ -102,6 +105,8 @@ The response should be JSON with `service: chat-animation-bot`.
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Secret | BotFather token |
 | `TELEGRAM_WEBHOOK_SECRET` | Secret | Webhook request verification |
+| `OWNER_TELEGRAM_ID` | Secret | Numeric Telegram ID of the Business account owner; required for owner-only mode |
+| `STAT_OWNER_IDS` | Optional secret | Comma-separated IDs allowed to use `/stat` |
 | `AI_MODEL` | Variable | Defaults to the model used by Smart-Tool-Bot robot handler |
 | `CLOUDFLARE_ACCOUNT_ID` | Optional secret | Only for REST fallback |
 | `CLOUDFLARE_API_TOKEN` | Optional secret | Only for REST fallback |
@@ -110,13 +115,14 @@ The response should be JSON with `service: chat-animation-bot`.
 
 - `business_message` with text/caption → AI reply
 - `/help` → short setup help
-- `/stat` → runtime statistics for the connected account owner
+- `/stat` → runtime statistics for the owner only
+- `/products`, `/product`, `/price`, `/catalog` → product catalog as a rich message with a contact button
 - `/stop` or `/disable_ai` → explains how to disconnect from Telegram Business settings
 - `edited_business_message` → ignored by default to prevent duplicate replies
 - `business_connection` → logged without exposing secrets
 - Webhook secret is checked when configured
 - Webhook returns quickly and runs AI work through `waitUntil`
-- root `GET /` reports `mode: user-reply-only` and the identity `4 0 4 \\ 2.0 [🇲🇲]`
+- root `GET /` reports `mode: owner-only-user-reply` and the identity `4 0 4 \\ 2.0 [🇲🇲]`
 
 ## Security
 
