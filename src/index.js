@@ -1,7 +1,18 @@
 // chat-animation-bot — Cloudflare Worker entrypoint
 // Telegram Business Chat Automation + Cloudflare Workers AI
-// Behavior: only the configured owner's Business connection is served;
-// owner messages trigger replies only when they contain a command.
+//
+// Behavior:
+// - Business chats: the AI answers customer messages ONLY while the admin
+//   (owner) is offline — i.e. the owner has not sent a message in that chat
+//   within ADMIN_ACTIVE_WINDOW_MINUTES (default 5). The admin can also flip
+//   the master switch with /ai_on and /ai_off in the bot's private chat.
+// - Commands (/start, /help, /stat, /products, /ai_on, /ai_off, /ai_status)
+//   work ONLY in the bot's private chat (a normal update.message whose
+//   chat.type is "private"). Commands sent anywhere else are ignored.
+// - AI replies are delivered as Telegram Rich Messages (Bot API 10.1+,
+//   https://core.telegram.org/bots/api-changelog#june-11-2026 and the
+//   August 24, 2026 update) via sendRichMessage, with a plain-text
+//   sendMessage fallback.
 
 import { generateAssistantReply } from './robot-ai.js';
 
@@ -11,6 +22,13 @@ const BOT_DISPLAY_NAME = '4 0 4 \\ 2.0 [🇲🇲]';
 const startedAt = Date.now();
 const metrics = { received: 0, replied: 0, skipped: 0, errors: 0 };
 const connections = new Map();
+
+// Admin presence tracking: business chat id -> timestamp (ms) of the owner's
+// last message in that chat. While the admin is "online" the AI stays quiet.
+// NOTE: Workers isolates are ephemeral, so this map resets when the isolate
+// is recycled. The /ai_on|/ai_off master switch is the durable control.
+const ownerLastSeenAt = new Map();
+let aiGloballyEnabled = true;
 
 const PRODUCT_RICH_MESSAGE = {
     markdown: [
@@ -44,6 +62,10 @@ const PRODUCT_RICH_MESSAGE = {
         '',
         '📩 For more information and to purchase, contact [@nkka404](https://t.me/nkka404).',
     ].join('\n'),
+};
+
+const PRODUCT_BUTTON = {
+    inline_keyboard: [[{ text: '📩 Contact @nkka404', url: 'https://t.me/nkka404' }]],
 };
 
 function json(data, status = 200) {
@@ -83,7 +105,26 @@ function ownerIds(env) {
         .filter((value) => Number.isSafeInteger(value) && value > 0);
 }
 
-function statisticsText() {
+// ---- Admin presence -------------------------------------------------------
+
+function adminActiveWindowMs(env) {
+    const minutes = Number(text(env.ADMIN_ACTIVE_WINDOW_MINUTES));
+    const safe = Number.isFinite(minutes) && minutes > 0 ? minutes : 5;
+    return safe * 60 * 1000;
+}
+
+function markAdminSeen(chatId) {
+    ownerLastSeenAt.set(chatId, Date.now());
+}
+
+function isAdminOnline(chatId, env) {
+    const last = ownerLastSeenAt.get(chatId);
+    return typeof last === 'number' && Date.now() - last < adminActiveWindowMs(env);
+}
+
+// ---- Text builders --------------------------------------------------------
+
+function statisticsText(env) {
     return [
         `📊 ${BOT_DISPLAY_NAME}`,
         '',
@@ -92,8 +133,58 @@ function statisticsText() {
         `✅ AI replies: ${metrics.replied}`,
         `⏭ Skipped: ${metrics.skipped}`,
         `❌ Errors: ${metrics.errors}`,
+        '',
+        `🤖 AI auto-reply: ${aiGloballyEnabled ? 'ON ✅' : 'OFF ⛔'}`,
+        `🟢 Admin active window: ${adminActiveWindowMs(env) / 60000} min`,
     ].join('\n');
 }
+
+function aiStatusText(env) {
+    const lines = [
+        `🤖 AI auto-reply: ${aiGloballyEnabled ? 'ON ✅' : 'OFF ⛔'}`,
+        `🟢 Admin counts as online for ${adminActiveWindowMs(env) / 60000} min after their last message in a chat.`,
+        '',
+        'Admin presence by business chat:',
+    ];
+    if (ownerLastSeenAt.size === 0) {
+        lines.push('(no business chat activity seen yet)');
+    }
+    for (const [chatId, seenAt] of ownerLastSeenAt) {
+        const mins = Math.floor((Date.now() - seenAt) / 60000);
+        lines.push(`• ${chatId}: last seen ${mins}m ago — ${isAdminOnline(chatId, env) ? 'online 🟢' : 'offline ⚪'}`);
+    }
+    return lines.join('\n');
+}
+
+function helpText() {
+    return [
+        `🤖 ${BOT_DISPLAY_NAME}`,
+        '',
+        'I answer your business chats with AI while you are offline.',
+        '',
+        'Commands (private chat only):',
+        '/products — show the product catalog',
+        '/ai_on — enable AI auto-replies',
+        '/ai_off — disable AI auto-replies',
+        '/ai_status — AI status and admin presence',
+        '/stat — runtime statistics (owner only)',
+        '/help — this message',
+    ].join('\n');
+}
+
+function productFallbackText() {
+    return [
+        'Available Products ✅',
+        '',
+        'Digital Ocean: 3 Droplets 35,000 Ks | 10 Droplets 40,000 Ks | PayPal package 50,000 Ks',
+        'SIM / WiFi: 150 GB 4,000 Ks | 250 GB 5,500 Ks | 500 GB 8,500 Ks',
+        'VPS: from 35,000 Ks to 100,000 Ks, Thailand 🇹🇭 / Singapore 🇸🇬',
+        '',
+        '📩 For more information and to purchase: @nkka404',
+    ].join('\n');
+}
+
+// ---- Telegram API ---------------------------------------------------------
 
 async function telegram(env, method, payload) {
     const token = getToken(env);
@@ -125,23 +216,58 @@ async function sendBusinessMessage(env, message, replyText) {
     });
 }
 
-async function sendBusinessRichMessage(env, message) {
+// Generic Rich Message sender for business chats (Bot API 10.1+,
+// https://core.telegram.org/bots/api#sendrichmessage). Falls back to plain
+// text when the rich format is rejected.
+async function sendBusinessRichMessage(env, message, richMessage, fallbackText, replyMarkup) {
     const payload = {
         chat_id: message.chat.id,
-        rich_message: PRODUCT_RICH_MESSAGE,
+        rich_message: richMessage,
         business_connection_id: message.business_connection_id,
         disable_web_page_preview: true,
-        reply_markup: {
-            inline_keyboard: [[{ text: '📩 Contact @nkka404', url: 'https://t.me/nkka404' }]],
-        },
         ...replyPayload(message),
     };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
 
     try {
         return await telegram(env, 'sendRichMessage', payload);
     } catch (error) {
         console.warn('Rich message unavailable; using plain-text fallback:', error.message);
-        return sendBusinessMessage(env, message, productFallbackText());
+        return sendBusinessMessage(env, message, fallbackText);
+    }
+}
+
+// AI replies go out as Telegram Rich Messages (Bot API 10.1+, extended
+// August 24, 2026): the markdown array is rendered with rich formatting.
+function aiRichMessage(replyText) {
+    return { markdown: [truncate(replyText)] };
+}
+
+async function sendBusinessAIReply(env, message, replyText) {
+    return sendBusinessRichMessage(env, message, aiRichMessage(replyText), replyText);
+}
+
+async function sendPrivateMessage(env, chatId, replyText) {
+    return telegram(env, 'sendMessage', {
+        chat_id: chatId,
+        text: truncate(replyText),
+        disable_web_page_preview: true,
+    });
+}
+
+async function sendPrivateRichMessage(env, chatId, richMessage, fallbackText, replyMarkup) {
+    const payload = {
+        chat_id: chatId,
+        rich_message: richMessage,
+        disable_web_page_preview: true,
+    };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+
+    try {
+        return await telegram(env, 'sendRichMessage', payload);
+    } catch (error) {
+        console.warn('Rich message unavailable; using plain-text fallback:', error.message);
+        return sendPrivateMessage(env, chatId, fallbackText);
     }
 }
 
@@ -152,6 +278,8 @@ async function sendTyping(env, message) {
         business_connection_id: message.business_connection_id,
     });
 }
+
+// ---- Message helpers ------------------------------------------------------
 
 function messageText(message) {
     return text(message?.text || message?.caption);
@@ -181,18 +309,6 @@ function isProductCommand(value) {
     return /^\/(?:products?|price|catalog|digital)(?:@\w+)?(?:\s|$)/i.test(text(value));
 }
 
-function productFallbackText() {
-    return [
-        'Available Products ✅',
-        '',
-        'Digital Ocean: 3 Droplets 35,000 Ks | 10 Droplets 40,000 Ks | PayPal package 50,000 Ks',
-        'SIM / WiFi: 150 GB 4,000 Ks | 250 GB 5,500 Ks | 500 GB 8,500 Ks',
-        'VPS: from 35,000 Ks to 100,000 Ks, Thailand 🇹🇭 / Singapore 🇸🇬',
-        '',
-        '📩 For more information and to purchase: @nkka404',
-    ].join('\n');
-}
-
 function isOwnerConnection(message, env) {
     const allowedConnectionId = text(env.BUSINESS_CONNECTION_ID);
     const currentConnectionId = text(message?.business_connection_id);
@@ -211,6 +327,8 @@ function isOwnerConnection(message, env) {
 function isOwnerSender(message, env) {
     return ownerIds(env).includes(Number(message?.from?.id));
 }
+
+// ---- Business chat handler: AI replies only while the admin is offline -----
 
 async function handleBusinessMessage(update, env) {
     const message = update.business_message;
@@ -235,38 +353,30 @@ async function handleBusinessMessage(update, env) {
 
     const prompt = messageText(message);
 
-    // Owner messages are administrative only. Ordinary owner text is ignored.
-    if (isOwnerSender(message, env) && !isCommand(prompt)) {
+    // Any owner message marks the admin as online/active in this chat and
+    // never receives an AI reply.
+    if (isOwnerSender(message, env)) {
+        markAdminSeen(message.chat.id);
         metrics.skipped += 1;
-        return { ignored: true, reason: 'owner_non_command' };
+        return { ignored: true, reason: 'owner_message' };
     }
 
-    if (isProductCommand(prompt)) {
-        await sendBusinessRichMessage(env, message);
-        metrics.replied += 1;
-        return { ok: true, command: 'products' };
+    // Commands only work in the bot's private chat.
+    if (isCommand(prompt)) {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'command_private_only' };
     }
 
-    if (/^\/stat(?:@\w+)?(?:\s|$)/i.test(prompt)) {
-        if (isOwnerSender(message, env)) {
-            await sendBusinessMessage(env, message, statisticsText());
-            metrics.replied += 1;
-        } else {
-            metrics.skipped += 1;
-        }
-        return { ok: true, command: 'stat' };
+    // Master switch (controlled from the private chat).
+    if (!aiGloballyEnabled) {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'ai_disabled' };
     }
 
-    if (prompt.startsWith('/disable_ai') || prompt.startsWith('/stop')) {
-        await sendBusinessMessage(env, message, 'AI chat automation is connected. To disable it, open Telegram Business Settings → Chatbots and remove this bot.');
-        metrics.replied += 1;
-        return { ok: true, command: 'disable_info' };
-    }
-
-    if (prompt.startsWith('/help')) {
-        await sendBusinessMessage(env, message, 'I am 4 0 4 \\ 2.0 [🇲🇲]. Send a customer message and I will reply on your behalf. Use /products to show the digital product catalog.');
-        metrics.replied += 1;
-        return { ok: true, command: 'help' };
+    // Stay quiet while the admin is handling the chat themselves.
+    if (isAdminOnline(message.chat.id, env)) {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'admin_online' };
     }
 
     await sendTyping(env, message).catch((error) => console.warn('Typing action failed:', error.message));
@@ -274,9 +384,96 @@ async function handleBusinessMessage(update, env) {
         senderName: [message.from.first_name, message.from.last_name].filter(Boolean).join(' '),
         chatType: message.chat.type,
     });
-    await sendBusinessMessage(env, message, reply);
+    await sendBusinessAIReply(env, message, reply);
     metrics.replied += 1;
     return { ok: true, command: 'ai_reply' };
+}
+
+// ---- Private chat handler: commands live here only ------------------------
+
+async function handlePrivateMessage(update, env) {
+    const message = update.message;
+    if (!message?.chat?.id) {
+        return { ignored: true, reason: 'unsupported' };
+    }
+
+    // Commands are only usable in the bot's private chat.
+    if (message.chat.type !== 'private') {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'non_private_chat' };
+    }
+
+    const prompt = messageText(message);
+    if (!prompt) {
+        metrics.skipped += 1;
+        return { ignored: true, reason: 'no_text' };
+    }
+    metrics.received += 1;
+
+    const chatId = message.chat.id;
+    const owner = isOwnerSender(message, env);
+
+    if (/^\/(?:start|help)(?:@\w+)?(?:\s|$)/i.test(prompt)) {
+        await sendPrivateMessage(env, chatId, helpText());
+        metrics.replied += 1;
+        return { ok: true, command: 'help' };
+    }
+
+    if (isProductCommand(prompt)) {
+        await sendPrivateRichMessage(env, chatId, PRODUCT_RICH_MESSAGE, productFallbackText(), PRODUCT_BUTTON);
+        metrics.replied += 1;
+        return { ok: true, command: 'products' };
+    }
+
+    if (/^\/stat(?:@\w+)?(?:\s|$)/i.test(prompt)) {
+        if (!owner) {
+            await sendPrivateMessage(env, chatId, '⛔ This command is for the bot owner only.');
+            metrics.skipped += 1;
+            return { ignored: true, reason: 'not_owner' };
+        }
+        await sendPrivateMessage(env, chatId, statisticsText(env));
+        metrics.replied += 1;
+        return { ok: true, command: 'stat' };
+    }
+
+    if (/^\/ai_on(?:@\w+)?(?:\s|$)/i.test(prompt)) {
+        if (!owner) {
+            await sendPrivateMessage(env, chatId, '⛔ This command is for the bot owner only.');
+            metrics.skipped += 1;
+            return { ignored: true, reason: 'not_owner' };
+        }
+        aiGloballyEnabled = true;
+        await sendPrivateMessage(env, chatId, '🤖 AI auto-replies are now ON. I will answer business chats while you are offline.');
+        metrics.replied += 1;
+        return { ok: true, command: 'ai_on' };
+    }
+
+    if (/^\/ai_off(?:@\w+)?(?:\s|$)/i.test(prompt)) {
+        if (!owner) {
+            await sendPrivateMessage(env, chatId, '⛔ This command is for the bot owner only.');
+            metrics.skipped += 1;
+            return { ignored: true, reason: 'not_owner' };
+        }
+        aiGloballyEnabled = false;
+        await sendPrivateMessage(env, chatId, '🤖 AI auto-replies are now OFF. Business chats will not receive AI answers until you run /ai_on.');
+        metrics.replied += 1;
+        return { ok: true, command: 'ai_off' };
+    }
+
+    if (/^\/ai_status(?:@\w+)?(?:\s|$)/i.test(prompt)) {
+        if (!owner) {
+            await sendPrivateMessage(env, chatId, '⛔ This command is for the bot owner only.');
+            metrics.skipped += 1;
+            return { ignored: true, reason: 'not_owner' };
+        }
+        await sendPrivateMessage(env, chatId, aiStatusText(env));
+        metrics.replied += 1;
+        return { ok: true, command: 'ai_status' };
+    }
+
+    await sendPrivateMessage(env, chatId, 'I only take commands here. Send /help to see what I can do. 🤖');
+    metrics.replied += 1;
+    return { ok: true, command: 'hint' };
 }
 
 async function verifyWebhook(request, env) {
@@ -290,7 +487,7 @@ export default {
         const url = new URL(request.url);
 
         if (request.method === 'GET' && url.pathname === '/') {
-            return json({ ok: true, service: 'chat-animation-bot', bot: BOT_DISPLAY_NAME, mode: 'owner-only-user-reply' });
+            return json({ ok: true, service: 'chat-animation-bot', bot: BOT_DISPLAY_NAME, mode: 'admin-offline-ai-rich' });
         }
 
         if (request.method !== 'POST' || url.pathname !== '/webhook') {
@@ -310,6 +507,8 @@ export default {
             try {
                 if (update.business_message) {
                     await handleBusinessMessage(update, env);
+                } else if (update.message) {
+                    await handlePrivateMessage(update, env);
                 } else if (update.edited_business_message) {
                     console.log('Ignored edited_business_message', update.update_id);
                 } else if (update.business_connection) {
@@ -338,4 +537,4 @@ export default {
     },
 };
 
-export { handleBusinessMessage, sendBusinessMessage, sendBusinessRichMessage, telegram, statisticsText };
+export { handleBusinessMessage, handlePrivateMessage, sendBusinessMessage, sendBusinessRichMessage, sendBusinessAIReply, sendPrivateMessage, sendPrivateRichMessage, telegram, statisticsText, aiStatusText };
