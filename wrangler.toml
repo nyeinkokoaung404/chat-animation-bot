@@ -1,0 +1,16 @@
+name = "chat-animation-bot"
+main = "src/index.js"
+compatibility_date = "2026-09-09"
+
+# Workers AI binding. This uses the same Llama model family as
+# Smart-Tool-Bot/functions/modules/robot_handlers.js.
+[ai]
+binding = "AI"
+
+[vars]
+AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
+
+# Secrets are set with `wrangler secret put`; do not put them in this file.
+# TELEGRAM_BOT_TOKEN
+# TELEGRAM_WEBHOOK_SECRET (recommended)
+# CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN are only needed for REST fallback.
