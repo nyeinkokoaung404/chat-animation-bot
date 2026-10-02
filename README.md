@@ -14,7 +14,9 @@ Telegram Settings → Telegram Business → Chatbots → Add Bot
 
 The bot must have permission to read and reply to the selected chats. The bot receives updates containing `business_connection_id` and replies with that same ID.
 
-This repository is configured for **owner-only Business connection + User reply only**. It serves only the Business connection whose owner ID matches `OWNER_TELEGRAM_ID`. Customer messages in the owner's selected chats can receive an AI reply. The owner’s ordinary text is ignored; the owner can use commands such as `/stat`, `/help`, and `/products` only. The bot does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
+This repository is configured for **owner-only Business connection + User reply only**. It serves the dedicated Business account connected to this bot. Customer messages in the owner's selected chats can receive an AI reply. The owner’s ordinary text is ignored; the owner can use administrative commands only. The bot does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
+
+The Worker does not require a previous in-memory `business_connection` update before answering. This is important because Cloudflare may route a later `business_message` to a fresh isolate. `BUSINESS_CONNECTION_ID` can be set for a strict connection-ID allow-list, but it is optional for a dedicated bot.
 
 Telegram may show `This bot doesn't support Secretary Mode yet` while adding the bot. That is a BotFather capability setting, not a Cloudflare error. Open `@BotFather → Bot Settings → Business Mode` and enable **Secretary Mode**, then reconnect the bot from Telegram Business settings. The code still remains reply-only; enabling Secretary Mode only allows Telegram to establish the Business connection.
 
@@ -34,6 +36,8 @@ wrangler deploy
 wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_WEBHOOK_SECRET
 wrangler secret put OWNER_TELEGRAM_ID
+# Optional strict connection allow-list:
+# wrangler secret put BUSINESS_CONNECTION_ID
 ```
 
 `TELEGRAM_WEBHOOK_SECRET` is optional but recommended. Use a long random value, for example:
@@ -106,6 +110,7 @@ The response should be JSON with `service: chat-animation-bot`.
 | `TELEGRAM_BOT_TOKEN` | Secret | BotFather token |
 | `TELEGRAM_WEBHOOK_SECRET` | Secret | Webhook request verification |
 | `OWNER_TELEGRAM_ID` | Secret | Numeric Telegram ID of the Business account owner; required for owner-only mode |
+| `BUSINESS_CONNECTION_ID` | Optional secret | Strict Telegram Business connection ID allow-list |
 | `STAT_OWNER_IDS` | Optional secret | Comma-separated IDs allowed to use `/stat` |
 | `AI_MODEL` | Variable | Defaults to the model used by Smart-Tool-Bot robot handler |
 | `CLOUDFLARE_ACCOUNT_ID` | Optional secret | Only for REST fallback |

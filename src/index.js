@@ -194,9 +194,18 @@ function productFallbackText() {
 }
 
 function isOwnerConnection(message, env) {
-    const connectionOwnerId = connections.get(message?.business_connection_id)?.user?.id;
-    const allowedOwners = ownerIds(env);
-    return allowedOwners.length > 0 && allowedOwners.includes(Number(connectionOwnerId));
+    const allowedConnectionId = text(env.BUSINESS_CONNECTION_ID);
+    const currentConnectionId = text(message?.business_connection_id);
+
+    // A Worker isolate may receive business_message without first receiving
+    // business_connection, so do not depend on the in-memory Map here.
+    // If an explicit connection ID is configured, enforce it strictly.
+    if (allowedConnectionId) return currentConnectionId === allowedConnectionId;
+
+    // This bot is dedicated to the owner's single Business account. The
+    // required OWNER_TELEGRAM_ID prevents an accidentally unconfigured bot
+    // from replying to arbitrary connections.
+    return ownerIds(env).length > 0;
 }
 
 function isOwnerSender(message, env) {
