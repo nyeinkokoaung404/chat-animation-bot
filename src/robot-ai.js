@@ -15,30 +15,28 @@ You are answering messages on behalf of a Telegram Business account. Be helpful 
 Response rules:
 1. Answer directly and keep replies concise.
 2. Match the user's language; Myanmar is preferred when the user writes Burmese.
-3. You may use simple Markdown formatting (bold, italic, inline code, lists, tables) — replies are delivered as Telegram Rich Messages.
+3. Replies are delivered as Telegram Rich Messages (Bot API 10.1+), so use structured Markdown: headings, bold, italic, inline code, bullet/numbered lists, and tables where they help readability. Keep formatting clean — avoid deeply nested structures.
 4. If you cannot do something, say so clearly and suggest a safe next step.
 5. Never invent account-specific details, prices, availability, or verification results.
 
-Digital products currently available from 4 0 4 \\ 2.0 [🇲🇲]:
+Contact information — share these when the user asks how to reach a human, buy something, or needs help beyond chat:
+- Viber: 09260879757
+- Facebook: https://www.facebook.com/www.nyeinkokoaung.2015
 
-Digital Ocean accounts:
-- 3 Droplets — 35,000 Ks — 5$ trial account, card-made check, secure-login warranty.
-- 10 Droplets — 40,000 Ks — 5$ trial account, card-made check, secure-login warranty.
-- 3 Droplets — 50,000 Ks — 5$ PayPal paid check, secure-login warranty.
-
-SIM / WiFi data packages:
-- 150 GB — 4,000 Ks — All SIM, WiFi & Starlink.
-- 250 GB — 5,500 Ks — All SIM, WiFi & Starlink.
-- 500 GB — 8,500 Ks — All SIM, WiFi & Starlink.
-
-VPS packages:
-- Thailand: 2C/3G/30G — 35,000 Ks; 4C/6G/60G — 70,000 Ks; 6C/12G/100G — 100,000 Ks; 2C/4G/100G — 50,000 Ks; 3C/8G/200G — 100,000 Ks.
-- Singapore: 1C/1G/30G — 35,000 Ks/5TB; 2C/2G/60G — 50,000 Ks/10TB; 2C/4G/120G — 80,000 Ks/15TB.
-
-When users ask about products, pricing, availability, or buying, show the relevant exact prices above and invite them to contact @nkka404 for more information and purchase. Do not claim that payment was received or an account was delivered.`;
+When users ask about products, pricing, availability, or buying, do not invent a catalog. Tell them to contact us directly via Viber (09260879757) or Facebook (https://www.facebook.com/www.nyeinkokoaung.2015) for the latest information. Do not claim that payment was received or an account was delivered.`;
 
 function clean(value) {
     return String(value || '').replace(/<\/?[^>]+(>|$)/g, '').trim();
+}
+
+// Build a Telegram Rich Message (Bot API 10.1+, see
+// https://core.telegram.org/bots/api-changelog#august-24-2026) from the AI's
+// Markdown reply text. The markdown array is rendered with rich formatting by
+// sendRichMessage; overlong text is truncated to Telegram's 4096-char limit.
+function toRichMessage(replyText, maxLength = 4096) {
+    const input = String(replyText || '').trim();
+    const text = input.length <= maxLength ? input : `${input.slice(0, maxLength - 1)}…`;
+    return { markdown: [text] };
 }
 
 function extract(value) {
@@ -100,4 +98,4 @@ export async function generateAssistantReply(userText, env = {}, context = {}) {
     return answer || 'Sorry, I cannot answer right now. Please try again in a moment.';
 }
 
-export { ROBOT_PROMPT, DEFAULT_MODEL };
+export { ROBOT_PROMPT, DEFAULT_MODEL, toRichMessage };

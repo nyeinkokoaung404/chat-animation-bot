@@ -16,7 +16,7 @@ The bot must have permission to read and reply to the selected chats. The bot re
 
 This repository is configured for **owner-only Business connection + AI replies only while the admin is offline**. It serves the dedicated Business account connected to this bot. Customer messages in the owner's selected chats receive an AI reply only when the admin (owner) has not recently sent a message in that chat — while the admin is actively chatting, the AI stays quiet. Owner messages never receive AI replies; any owner message marks the admin as online in that chat.
 
-Commands (`/start`, `/help`, `/stat`, `/products`, `/ai_on`, `/ai_off`, `/ai_status`) work **only in the bot's private chat** — open a direct chat with the bot and use them there. Commands sent in business chats or groups are ignored. The bot does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
+Commands (`/start`, `/help`, `/stat`, `/contact`, `/ai_on`, `/ai_off`, `/ai_status`) work **only in the bot's private chat** — open a direct chat with the bot and use them there. Commands sent in business chats or groups are ignored. The bot does not send proactive messages, does not answer edited messages, and skips messages sent by another business bot.
 
 The Worker does not require a previous in-memory `business_connection` update before answering. This is important because Cloudflare may route a later `business_message` to a fresh isolate. `BUSINESS_CONNECTION_ID` can be set for a strict connection-ID allow-list, but it is optional for a dedicated bot.
 
@@ -37,13 +37,14 @@ wrangler deploy
 ```bash
 wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_WEBHOOK_SECRET
-wrangler secret put OWNER_TELEGRAM_ID
 # Optional strict connection allow-list:
 # wrangler secret put BUSINESS_CONNECTION_ID
 # Optional: minutes the admin counts as "online" after their last message
 # in a business chat (default 5):
 # wrangler secret put ADMIN_ACTIVE_WINDOW_MINUTES
 ```
+
+`OWNER_TELEGRAM_ID` is already set in `wrangler.toml` under `[vars]` (numeric Telegram ID of the Business account owner). You may also set `STAT_OWNER_IDS` for additional owner/admin IDs allowed to use `/stat`.
 
 `TELEGRAM_WEBHOOK_SECRET` is optional but recommended. Use a long random value, for example:
 
@@ -53,7 +54,7 @@ openssl rand -hex 32
 
 The Worker uses the native Workers AI binding from `wrangler.toml`. No Cloudflare AI REST token is needed for the normal path.
 
-Set `OWNER_TELEGRAM_ID` to the numeric Telegram ID of the Business account owner. This is required; the Worker fails closed and does not answer any Business connection when it is missing. You may also set `STAT_OWNER_IDS` for additional owner/admin IDs allowed to use `/stat`.
+`OWNER_TELEGRAM_ID` is set in `wrangler.toml` under `[vars]`. This is required; the Worker fails closed and does not answer any Business connection when it is missing. You may also set `STAT_OWNER_IDS` for additional owner/admin IDs allowed to use `/stat`.
 
 Optional owner allow-list for `/stat`:
 
@@ -114,8 +115,8 @@ The response should be JSON with `service: chat-animation-bot`.
 | Variable | Type | Purpose |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Secret | BotFather token |
-| `TELEGRAM_WEBHOOK_SECRET` | Secret | Webhook request verification |
-| `OWNER_TELEGRAM_ID` | Secret | Numeric Telegram ID of the Business account owner; required for owner-only mode |
+| `TELEGRAM_WEBHOOK_SECRET` | Secret (via `wrangler secret put` — never commit it to the repo) | Webhook request verification |
+| `OWNER_TELEGRAM_ID` | Variable in `wrangler.toml` | Numeric Telegram ID of the Business account owner; required for owner-only mode |
 | `BUSINESS_CONNECTION_ID` | Optional secret | Strict Telegram Business connection ID allow-list |
 | `ADMIN_ACTIVE_WINDOW_MINUTES` | Optional variable | Minutes the admin counts as online after their last message in a business chat; AI stays quiet during this window (default `5`) |
 | `STAT_OWNER_IDS` | Optional secret | Comma-separated IDs allowed to use `/stat` |
@@ -130,7 +131,7 @@ The response should be JSON with `service: chat-animation-bot`.
 - Commands in business chats → ignored (commands work only in the bot's private chat)
 - Private chat with the bot (`message`, `chat.type: private`):
   - `/start`, `/help` → help text
-  - `/products`, `/product`, `/price`, `/catalog` → product catalog as a rich message with a contact button
+  - `/contact` (also `/products`, `/product`, `/price`, `/catalog`) → contact card (Viber, Facebook) as a rich message with a Facebook button
   - `/ai_on`, `/ai_off` → enable/disable AI auto-replies (owner only)
   - `/ai_status` → AI status and per-chat admin presence (owner only)
   - `/stat` → runtime statistics (owner only)
@@ -143,4 +144,4 @@ The response should be JSON with `service: chat-animation-bot`.
 
 ## Security
 
-Do not commit bot tokens, webhook secrets, Cloudflare API tokens, or private user messages. Review Worker logs carefully because business messages may contain private customer data.
+Do not commit bot tokens, webhook secrets, Cloudflare API tokens, or private user messages — this repo is public. `TELEGRAM_WEBHOOK_SECRET` must only be set with `wrangler secret put TELEGRAM_WEBHOOK_SECRET`, never written into `wrangler.toml` or any committed file. Review Worker logs carefully because business messages may contain private customer data.

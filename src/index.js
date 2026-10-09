@@ -14,7 +14,7 @@
 //   August 24, 2026 update) via sendRichMessage, with a plain-text
 //   sendMessage fallback.
 
-import { generateAssistantReply } from './robot-ai.js';
+import { generateAssistantReply, toRichMessage } from './robot-ai.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_TELEGRAM_TEXT = 4096;
@@ -30,42 +30,24 @@ const connections = new Map();
 const ownerLastSeenAt = new Map();
 let aiGloballyEnabled = true;
 
-const PRODUCT_RICH_MESSAGE = {
+const CONTACT_RICH_MESSAGE = {
     markdown: [
-        '# Available Products ✅',
+        '# Contact Us 📞',
         '---',
-        '## Digital Ocean Accounts',
-        '| Package | Price | Details |',
-        '| --- | ---: | --- |',
-        '| 3 Droplets | 35,000 Ks | 5$ trial account, card-made check, secure-login warranty |',
-        '| 10 Droplets | 40,000 Ks | 5$ trial account, card-made check, secure-login warranty |',
-        '| 3 Droplets | 50,000 Ks | 5$ PayPal paid check, secure-login warranty |',
+        'Have a question or need help? Reach us directly:',
         '',
-        '## All SIM / WiFi Data Packages',
-        '| Data volume | Price | Availability |',
-        '| --- | ---: | --- |',
-        '| 150 GB | 4,000 Ks | All SIM, WiFi & Starlink ✅ |',
-        '| 250 GB | 5,500 Ks | All SIM, WiFi & Starlink ✅ |',
-        '| 500 GB | 8,500 Ks | All SIM, WiFi & Starlink ✅ |',
+        '## Viber',
+        '📱 `09260879757`',
         '',
-        '## VPS Prices',
-        '| CPU | Memory | Disk | Price | Traffic | Location |',
-        '| --- | --- | --- | ---: | --- | --- |',
-        '| 2 Core | 3 GB | 30 GB | 35,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
-        '| 4 Core | 6 GB | 60 GB | 70,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
-        '| 6 Core | 12 GB | 100 GB | 100,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
-        '| 2 Core | 4 GB | 100 GB | 50,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
-        '| 3 Core | 8 GB | 200 GB | 100,000 Ks | Unlimited ✅ | Thailand 🇹🇭 |',
-        '| 1 Core | 1 GB | 30 GB | 35,000 Ks | 5 TB ✅ | Singapore 🇸🇬 |',
-        '| 2 Core | 2 GB | 60 GB | 50,000 Ks | 10 TB ✅ | Singapore 🇸🇬 |',
-        '| 2 Core | 4 GB | 120 GB | 80,000 Ks | 15 TB ✅ | Singapore 🇸🇬 |',
+        '## Facebook',
+        '🔗 [www.nyeinkokoaung.2015](https://www.facebook.com/www.nyeinkokoaung.2015)',
         '',
-        '📩 For more information and to purchase, contact [@nkka404](https://t.me/nkka404).',
+        'We usually reply as soon as possible. 🤖',
     ].join('\n'),
 };
 
-const PRODUCT_BUTTON = {
-    inline_keyboard: [[{ text: '📩 Contact @nkka404', url: 'https://t.me/nkka404' }]],
+const CONTACT_BUTTON = {
+    inline_keyboard: [[{ text: '🔗 Facebook', url: 'https://www.facebook.com/www.nyeinkokoaung.2015' }]],
 };
 
 function json(data, status = 200) {
@@ -163,7 +145,7 @@ function helpText() {
         'I answer your business chats with AI while you are offline.',
         '',
         'Commands (private chat only):',
-        '/products — show the product catalog',
+        '/contact — contact info (Viber, Facebook)',
         '/ai_on — enable AI auto-replies',
         '/ai_off — disable AI auto-replies',
         '/ai_status — AI status and admin presence',
@@ -172,15 +154,14 @@ function helpText() {
     ].join('\n');
 }
 
-function productFallbackText() {
+function contactFallbackText() {
     return [
-        'Available Products ✅',
+        'Contact Us 📞',
         '',
-        'Digital Ocean: 3 Droplets 35,000 Ks | 10 Droplets 40,000 Ks | PayPal package 50,000 Ks',
-        'SIM / WiFi: 150 GB 4,000 Ks | 250 GB 5,500 Ks | 500 GB 8,500 Ks',
-        'VPS: from 35,000 Ks to 100,000 Ks, Thailand 🇹🇭 / Singapore 🇸🇬',
+        'Viber: 09260879757',
+        'Facebook: https://www.facebook.com/www.nyeinkokoaung.2015',
         '',
-        '📩 For more information and to purchase: @nkka404',
+        'We usually reply as soon as possible.',
     ].join('\n');
 }
 
@@ -238,13 +219,10 @@ async function sendBusinessRichMessage(env, message, richMessage, fallbackText, 
 }
 
 // AI replies go out as Telegram Rich Messages (Bot API 10.1+, extended
-// August 24, 2026): the markdown array is rendered with rich formatting.
-function aiRichMessage(replyText) {
-    return { markdown: [truncate(replyText)] };
-}
-
+// August 24, 2026). The payload shape is built by robot-ai.js so the AI layer
+// owns rich-message formatting.
 async function sendBusinessAIReply(env, message, replyText) {
-    return sendBusinessRichMessage(env, message, aiRichMessage(replyText), replyText);
+    return sendBusinessRichMessage(env, message, toRichMessage(replyText), replyText);
 }
 
 async function sendPrivateMessage(env, chatId, replyText) {
@@ -305,8 +283,8 @@ function isCommand(value) {
     return /^\/\w+(?:@\w+)?(?:\s|$)/.test(text(value));
 }
 
-function isProductCommand(value) {
-    return /^\/(?:products?|price|catalog|digital)(?:@\w+)?(?:\s|$)/i.test(text(value));
+function isContactCommand(value) {
+    return /^\/(?:contact|products?|price|catalog|digital)(?:@\w+)?(?:\s|$)/i.test(text(value));
 }
 
 function isOwnerConnection(message, env) {
@@ -419,10 +397,10 @@ async function handlePrivateMessage(update, env) {
         return { ok: true, command: 'help' };
     }
 
-    if (isProductCommand(prompt)) {
-        await sendPrivateRichMessage(env, chatId, PRODUCT_RICH_MESSAGE, productFallbackText(), PRODUCT_BUTTON);
+    if (isContactCommand(prompt)) {
+        await sendPrivateRichMessage(env, chatId, CONTACT_RICH_MESSAGE, contactFallbackText(), CONTACT_BUTTON);
         metrics.replied += 1;
-        return { ok: true, command: 'products' };
+        return { ok: true, command: 'contact' };
     }
 
     if (/^\/stat(?:@\w+)?(?:\s|$)/i.test(prompt)) {

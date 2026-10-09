@@ -9,6 +9,10 @@ binding = "AI"
 
 [vars]
 AI_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
+# Numeric Telegram ID of the Business account owner. This is required; the
+# Worker fails closed and does not answer any Business connection when it is
+# missing. (A plain user ID is safe to keep here; real secrets go below.)
+OWNER_TELEGRAM_ID = "1273841502"
 
 # Secrets are set with `wrangler secret put`; do not put them in this file.
 # TELEGRAM_BOT_TOKEN
