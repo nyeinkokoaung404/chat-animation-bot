@@ -31,12 +31,36 @@ function clean(value) {
 
 // Build a Telegram Rich Message (Bot API 10.1+, see
 // https://core.telegram.org/bots/api-changelog#august-24-2026) from the AI's
-// Markdown reply text. The markdown array is rendered with rich formatting by
-// sendRichMessage; overlong text is truncated to Telegram's 4096-char limit.
+// Markdown reply text. NOTE: InputRichMessage.markdown is a String, not an
+// array — sending an array makes Telegram reject the request, which is why
+// replies previously fell back to plain text showing raw Markdown.
 function toRichMessage(replyText, maxLength = 4096) {
     const input = String(replyText || '').trim();
     const text = input.length <= maxLength ? input : `${input.slice(0, maxLength - 1)}…`;
-    return { markdown: [text] };
+    return { markdown: text };
+}
+
+// Plain-text version of a Markdown reply, used as the fallback when
+// sendRichMessage is unavailable: strips headings, emphasis markers, list
+// bullets, table pipes, and link syntax so the user never sees raw Markdown.
+function stripMarkdown(replyText) {
+    return String(replyText || '')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/(\*\*|__)([\s\S]*?)\1/g, '$2')
+        .replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, '$1$2')
+        .replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, '$1$2')
+        .replace(/~~([\s\S]*?)~~/g, '$1')
+        .replace(/`{1,3}([\s\S]*?)`{1,3}/g, '$1')
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+        .replace(/^\s*\|?(\s*:?-+:?\s*\|)+\s*$/gm, '')
+        .replace(/\|/g, ' ')
+        .replace(/^\s*[-*+]\s+/gm, '• ')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/^---+\s*$/gm, '')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
 function extract(value) {
@@ -98,4 +122,4 @@ export async function generateAssistantReply(userText, env = {}, context = {}) {
     return answer || 'Sorry, I cannot answer right now. Please try again in a moment.';
 }
 
-export { ROBOT_PROMPT, DEFAULT_MODEL, toRichMessage };
+export { ROBOT_PROMPT, DEFAULT_MODEL, toRichMessage, stripMarkdown };

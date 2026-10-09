@@ -14,7 +14,7 @@
 //   August 24, 2026 update) via sendRichMessage, with a plain-text
 //   sendMessage fallback.
 
-import { generateAssistantReply, toRichMessage } from './robot-ai.js';
+import { generateAssistantReply, toRichMessage, stripMarkdown } from './robot-ai.js';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const MAX_TELEGRAM_TEXT = 4096;
@@ -31,6 +31,7 @@ const ownerLastSeenAt = new Map();
 let aiGloballyEnabled = true;
 
 const CONTACT_RICH_MESSAGE = {
+    // NOTE: InputRichMessage.markdown is a String (not an array).
     markdown: [
         '# Contact Us 📞',
         '---',
@@ -205,7 +206,6 @@ async function sendBusinessRichMessage(env, message, richMessage, fallbackText, 
         chat_id: message.chat.id,
         rich_message: richMessage,
         business_connection_id: message.business_connection_id,
-        disable_web_page_preview: true,
         ...replyPayload(message),
     };
     if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -220,9 +220,10 @@ async function sendBusinessRichMessage(env, message, richMessage, fallbackText, 
 
 // AI replies go out as Telegram Rich Messages (Bot API 10.1+, extended
 // August 24, 2026). The payload shape is built by robot-ai.js so the AI layer
-// owns rich-message formatting.
+// owns rich-message formatting. If rich sending fails, the fallback strips
+// Markdown so the user sees clean text instead of raw markup.
 async function sendBusinessAIReply(env, message, replyText) {
-    return sendBusinessRichMessage(env, message, toRichMessage(replyText), replyText);
+    return sendBusinessRichMessage(env, message, toRichMessage(replyText), stripMarkdown(replyText));
 }
 
 async function sendPrivateMessage(env, chatId, replyText) {
@@ -237,7 +238,6 @@ async function sendPrivateRichMessage(env, chatId, richMessage, fallbackText, re
     const payload = {
         chat_id: chatId,
         rich_message: richMessage,
-        disable_web_page_preview: true,
     };
     if (replyMarkup) payload.reply_markup = replyMarkup;
 
